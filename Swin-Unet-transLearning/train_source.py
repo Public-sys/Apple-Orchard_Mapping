@@ -87,8 +87,9 @@ def main():
     set_seed(args.seed)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    # Use the repository architecture; CLI values override the key training fields.
     config = get_config(args)
+    # get_config() returns a frozen YACS node; override CLI values safely.
+    config.defrost()
     config.DATA.BATCH_SIZE = args.batch_size
     config.DATA.IMG_SIZE = args.img_size
     config.MODEL.NUM_CLASSES = args.num_classes
@@ -96,6 +97,7 @@ def main():
     config.TRAIN.BASE_LR = args.base_lr
     config.TRAIN.MIN_LR = args.min_lr
     config.TRAIN.WEIGHT_DECAY = args.weight_decay
+    config.freeze()
 
     model = SwinUnet(config, img_size=args.img_size, num_classes=args.num_classes, zero_head=False)
     if args.source_ckpt:
