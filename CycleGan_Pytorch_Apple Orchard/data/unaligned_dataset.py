@@ -1,16 +1,16 @@
 import os
 import numpy as np
+from PIL import Image
 from data.base_dataset import BaseDataset, is_image_file, get_transform
 import rasterio
-import torch
 
 
 class UnalignedDataset(BaseDataset):
-    """Unaligned CycleGAN dataset for RGB GeoTIFF patches.
+    """Unaligned CycleGAN dataset for 8-bit RGB GeoTIFF patches.
 
-    TIFF metadata are retained for inference output. Pixel values are converted
-    to uint8 for the standard 3-channel CycleGAN pipeline; therefore the input
-    TIFFs used here should already be 8-bit RGB patches.
+    The manuscript pipeline uses 8-bit RGB imagery. To avoid silently changing
+    reflectance values, non-uint8 TIFFs are rejected rather than cast. GeoTIFF
+    metadata are cached for later inference/output handling.
     """
 
     def __init__(self, opt):
@@ -26,40 +26,38 @@ class UnalignedDataset(BaseDataset):
         self.transform_A = get_transform(opt, grayscale=(opt.input_nc == 1))
         self.transform_B = get_transform(opt, grayscale=(opt.output_nc == 1))
 
-        self.meta_A = {}
-        for path in self.A_paths:
+        self.meta_A = self._collect_metadata(self.A_paths)
+        self.meta_B = self._collect_metadata(self.B_paths)
+
+    @staticmethod
+    def _collect_metadata(paths):
+        metadata = {}
+        for path in paths:
             with rasterio.open(path) as src:
-                self.meta_A[path] = {
+                metadata[path] = {
                     'meta': src.meta.copy(),
                     'transform': src.transform,
                     'crs': src.crs,
                     'height': src.height,
                     'width': src.width,
                     'count': src.count,
+                    'dtype': src.dtypes[0],
                 }
-        self.meta_B = {}
-        for path in self.B_paths:
-            with rasterio.open(path) as src:
-                self.meta_B[path] = {
-                    'meta': src.meta.copy(),
-                    'transform': src.transform,
-                    'crs': src.crs,
-                    'height': src.height,
-                    'width': src.width,
-                    'count': src.count,
-                }
+        return metadata
 
     @staticmethod
     def _read_rgb_tif(path):
         with rasterio.open(path) as src:
-            arr = src.read()
-        if arr.ndim != 3:
-            raise ValueError(f'{path}: expected multi-band TIFF, got {arr.shape}')
-        if arr.shape[0] < 3:
-            raise ValueError(f'{path}: CycleGAN requires at least 3 input bands, got {arr.shape[0]}')
-        # Use the first three bands as RGB, consistent with the manuscript setup.
-        arr = arr[:3]
-        return np.transpose(arr, (1, 2, 0)).astype(np.uint8)
+            if src.count < 3:
+                raise ValueError(f'{path}: CycleGAN requires at least 3 bands, got {src.count}')
+            if src.dtypes[0] != 'uint8' or any(dtype != 'uint8' for dtype in src.dtypes[:3]):
+                raise ValueError(
+                    f'{path}: expected 8-bit RGB TIFF for CycleGAN, got dtypes={src.dtypes[:3]}. '
+                    'Convert/scale the imagery explicitly before training rather than casting here.'
+                )
+            arr = src.read([1, 2, 3])
+        arr = np.transpose(arr, (1, 2, 0))
+        return Image.fromarray(arr, mode='RGB')
 
     def __getitem__(self, index):
         A_path = self.A_paths[index % self.A_size]
