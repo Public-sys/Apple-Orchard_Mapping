@@ -1,0 +1,73 @@
+BASE: ['']
+
+DATA:
+  BATCH_SIZE: 4
+  DATA_PATH: ''
+  DATASET: 'apple_orchard'
+  IMG_SIZE: 256
+  INTERPOLATION: 'bicubic'
+  ZIP_MODE: false
+  CACHE_MODE: 'part'
+  PIN_MEMORY: true
+  NUM_WORKERS: 4
+
+MODEL:
+  TYPE: 'swin'
+  NAME: 'swin_tiny_patch4_window8_256'
+  PRETRAIN_CKPT: './pretrained_ckpt/source_best.pth'
+  RESUME: ''
+  NUM_CLASSES: 2
+  DROP_RATE: 0.0
+  DROP_PATH_RATE: 0.1
+  LABEL_SMOOTHING: 0.0
+  SWIN:
+    PATCH_SIZE: 4
+    IN_CHANS: 3
+    EMBED_DIM: 96
+    DEPTHS: [2, 2, 6, 2]
+    DECODER_DEPTHS: [2, 2, 6, 2]
+    NUM_HEADS: [3, 6, 12, 24]
+    WINDOW_SIZE: 8
+    MLP_RATIO: 4.0
+    QKV_BIAS: true
+    QK_SCALE: null
+    APE: false
+    PATCH_NORM: true
+    FINAL_UPSAMPLE: 'expand_first'
+
+TRAIN:
+  START_EPOCH: 0
+  EPOCHS: 150
+  WARMUP_EPOCHS: 5
+  WEIGHT_DECAY: 0.01
+  BASE_LR: 0.0001
+  MIN_LR: 0.000001
+  CLIP_GRAD: 5.0
+  ACCUMULATION_STEPS: 1
+  USE_CHECKPOINT: false
+  PHF:
+    ENABLE: true
+    INITIAL_PHASE: 'decoder_stage4'
+    PERC_WEIGHT: 0.05
+    STAGE4_EPOCHS: 10
+    STAGE3_EPOCHS: 20
+    FULL_FINE_TUNE_EPOCHS: 120
+    LR_DECAY: 0.1
+  OPTIMIZER:
+    NAME: 'adamw'
+    EPS: 1.0e-8
+    BETAS: [0.9, 0.999]
+
+AUG:
+  COLOR_JITTER: 0.0
+  MIXUP: 0.0
+  CUTMIX: 0.0
+
+TEST:
+  CROP: true
+
+OUTPUT: './results/apple_transfer'
+TAG: 'Trans_GAN_SwinUNet'
+SAVE_FREQ: 1
+PRINT_FREQ: 20
+SEED: 1234
