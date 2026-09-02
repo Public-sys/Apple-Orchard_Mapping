@@ -2,6 +2,7 @@ import logging
 import os
 import sys
 from collections import deque
+import csv
 import numpy as np
 import torch
 import torch.nn as nn
@@ -18,9 +19,7 @@ def unwrap(model):
 
 
 def set_phase(model, phase):
-    """Progressive unfreezing: I decoder only; II + deepest encoder; III + middle encoder.
-    The shallowest encoder stage remains frozen throughout transfer learning.
-    """
+    """Stage I decoder only; Stage II + deepest encoder; Stage III + middle encoder."""
     m = unwrap(model)
     net = m.swin_unet
     for p in m.parameters():
@@ -35,7 +34,6 @@ def set_phase(model, phase):
         modules = decoder_modules + [net.layers[3], net.layers[2]]
     else:
         raise ValueError(f'Unknown transfer phase: {phase}')
-
     for module in modules:
         if module is not None:
             for p in module.parameters():
@@ -50,7 +48,6 @@ def build_optimizer(model, lr, weight_decay):
 
 
 def feature_map_loss(features):
-    """Hierarchical feature consistency loss used as the perceptual/feature term."""
     if not features or len(features) < 2:
         return features[0].new_tensor(0.) if features else None
     maps = []
@@ -70,9 +67,7 @@ def feature_map_loss(features):
 
 
 def semantic_loss(logits, labels, ce_loss, dice_loss, sem_weight):
-    l_ce = ce_loss(logits, labels)
-    l_dice = dice_loss(logits, labels, softmax=True)
-    return sem_weight * (0.5 * l_ce + 0.5 * l_dice)
+    return sem_weight * (0.5 * ce_loss(logits, labels) + 0.5 * dice_loss(logits, labels, softmax=True))
 
 
 def evaluate(model, loader, ce_loss, dice_loss, sem_weight, device):
@@ -97,7 +92,7 @@ def converged(loss_window, tolerance):
     if len(loss_window) < loss_window.maxlen:
         return False
     values = list(loss_window)
-    return (max(values) - min(values)) <= tolerance
+    return max(values) - min(values) <= tolerance
 
 
 def trainer_transfer(args, model, snapshot_path):
@@ -105,13 +100,11 @@ def trainer_transfer(args, model, snapshot_path):
     logging.basicConfig(filename=os.path.join(snapshot_path, 'transfer.log'), level=logging.INFO,
                         format='[%(asctime)s] %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
     logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
-
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model.to(device)
-    train_tf = TransferGenerator((args.img_size, args.img_size), True)
-    val_tf = TransferGenerator((args.img_size, args.img_size), False)
-    train_set = OrchardTransferDataset(args.root_path, args.list_dir, 'train', train_tf)
-    val_set = OrchardTransferDataset(args.root_path, args.list_dir, 'val', val_tf)
+
+    train_set = OrchardTransferDataset(args.root_path, args.list_dir, 'train', TransferGenerator((args.img_size, args.img_size), True))
+    val_set = OrchardTransferDataset(args.root_path, args.list_dir, 'val', TransferGenerator((args.img_size, args.img_size), False))
     train_loader = DataLoader(train_set, batch_size=args.batch_size * args.n_gpu, shuffle=True,
                               num_workers=args.num_workers, pin_memory=True)
     val_loader = DataLoader(val_set, batch_size=args.batch_size * args.n_gpu, shuffle=False,
@@ -120,31 +113,24 @@ def trainer_transfer(args, model, snapshot_path):
     ce_loss = nn.CrossEntropyLoss()
     dice_loss = DiceLoss(args.num_classes)
     scaler = GradScaler(enabled=device.type == 'cuda')
-
-    phases = [
-        ('stage1_decoder', args.base_lr),
-        ('stage2_deep', args.base_lr),
-        ('stage3_mid', args.base_lr),
-    ]
+    phases = ['stage1_decoder', 'stage2_deep', 'stage3_mid']
     max_stage_epochs = max(1, args.max_epochs_per_stage)
     total_max_epochs = 3 * max_stage_epochs
     best = -1.0
     history = []
     epoch_id = 0
-    consecutive_hits = 0
-    loss_window = deque(maxlen=max(1, args.sliding_window))
 
-    for phase_index, (phase, lr) in enumerate(phases):
+    for phase_index, phase in enumerate(phases):
         if epoch_id >= total_max_epochs:
             break
         set_phase(model, phase)
-        opt = build_optimizer(model, lr, args.weight_decay)
+        opt = build_optimizer(model, args.base_lr, args.weight_decay)
         remaining = min(max_stage_epochs, total_max_epochs - epoch_id)
-        sch = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=remaining, eta_min=args.min_lr)
-        stage_start = epoch_id
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=remaining, eta_min=args.min_lr)
+        loss_window = deque(maxlen=max(1, args.sliding_window))
         consecutive_hits = 0
-        loss_window.clear()
-        logging.info('PHASE=%s max_epochs=%d lr=%g trainable=%d', phase, remaining, lr,
+        stage_start = epoch_id
+        logging.info('PHASE=%s max_epochs=%d lr=%g trainable=%d', phase, remaining, args.base_lr,
                      sum(p.numel() for p in model.parameters() if p.requires_grad))
 
         for local_epoch in range(remaining):
@@ -168,37 +154,35 @@ def trainer_transfer(args, model, snapshot_path):
                     scaler.update()
                     opt.zero_grad(set_to_none=True)
                 running += total.item() * max(1, args.accumulation_steps)
+            scheduler.step()
 
-            sch.step()
             train_loss = running / max(1, len(train_loader))
             val_loss, miou = evaluate(model, val_loader, ce_loss, dice_loss, args.sem_weight, device)
-            history.append([epoch_id, phase, train_loss, val_loss, miou, opt.param_groups[0]['lr']])
             loss_window.append(train_loss)
-
             if converged(loss_window, args.tolerance):
                 consecutive_hits += 1
             else:
                 consecutive_hits = 0
-            can_switch = (len(loss_window) == loss_window.maxlen and
-                          consecutive_hits >= max(1, args.consecutive) and
+            can_switch = (consecutive_hits >= max(1, args.consecutive) and
                           (epoch_id - stage_start + 1) < remaining)
-
+            history.append([epoch_id + 1, phase, train_loss, val_loss, miou, opt.param_groups[0]['lr'], consecutive_hits])
             logging.info('epoch=%d phase=%s train=%.6f val=%.6f mIoU=%.6f stable=%d/%d',
-                         epoch_id, phase, train_loss, val_loss, miou,
-                         consecutive_hits, args.consecutive)
+                         epoch_id + 1, phase, train_loss, val_loss, miou, consecutive_hits, args.consecutive)
 
-            state = {'model': unwrap(model).state_dict(), 'epoch': epoch_id,
+            state = {'model': unwrap(model).state_dict(), 'epoch': epoch_id + 1,
                      'phase': phase, 'miou': miou, 'history': history}
             torch.save(state, os.path.join(snapshot_path, 'last.pth'))
             if miou > best:
                 best = miou
                 torch.save(state, os.path.join(snapshot_path, 'best.pth'))
-
             epoch_id += 1
             if can_switch:
-                logging.info('SDB_SWITCH phase=%s -> next_stage at epoch=%d', phase, epoch_id)
+                logging.info('SDB_SWITCH phase=%s -> next stage at epoch=%d', phase, epoch_id)
                 break
 
-    np.savetxt(os.path.join(snapshot_path, 'history.csv'), np.asarray(history, dtype=object),
-               delimiter=',', fmt='%s', header='epoch,phase,train_loss,val_loss,mIoU,lr', comments='')
+    with open(os.path.join(snapshot_path, 'history.csv'), 'w', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        writer.writerow(['epoch', 'phase', 'train_loss', 'val_loss', 'mIoU', 'lr', 'stable_count'])
+        writer.writerows(history)
     logging.info('Finished; total_epochs=%d; best validation mIoU=%.6f', epoch_id, best)
+    return best
