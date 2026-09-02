@@ -48,6 +48,7 @@ def build_optimizer(model, lr, weight_decay):
 
 
 def feature_map_loss(features):
+    """Hierarchical feature consistency term used during target-domain adaptation."""
     if not features or len(features) < 2:
         return features[0].new_tensor(0.) if features else None
     maps = []
@@ -135,7 +136,9 @@ def trainer_transfer(args, model, snapshot_path):
 
         for local_epoch in range(remaining):
             model.train()
-            running = 0.0
+            running_total = 0.0
+            running_sem = 0.0
+            running_perc = 0.0
             opt.zero_grad(set_to_none=True)
             for step, batch in enumerate(tqdm(train_loader, desc=f'{phase} {local_epoch + 1}/{remaining}')):
                 x = batch['image'].to(device, non_blocking=True)
@@ -144,30 +147,40 @@ def trainer_transfer(args, model, snapshot_path):
                     out, features = model(x)
                     l_sem = semantic_loss(out, y, ce_loss, dice_loss, args.sem_weight)
                     l_perc = feature_map_loss(features)
-                    total = l_sem + args.perc_weight * (l_perc if l_perc is not None else 0.0)
-                    total = total / max(1, args.accumulation_steps)
-                scaler.scale(total).backward()
+                    if l_perc is None:
+                        l_perc = l_sem.new_tensor(0.)
+                    total = l_sem + args.perc_weight * l_perc
+                    total_for_backward = total / max(1, args.accumulation_steps)
+                scaler.scale(total_for_backward).backward()
                 if (step + 1) % max(1, args.accumulation_steps) == 0:
                     scaler.unscale_(opt)
                     torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad)
                     scaler.step(opt)
                     scaler.update()
                     opt.zero_grad(set_to_none=True)
-                running += total.item() * max(1, args.accumulation_steps)
+                running_total += total.item()
+                running_sem += l_sem.item()
+                running_perc += l_perc.item()
             scheduler.step()
 
-            train_loss = running / max(1, len(train_loader))
+            train_total = running_total / max(1, len(train_loader))
+            train_sem = running_sem / max(1, len(train_loader))
+            train_perc = running_perc / max(1, len(train_loader))
             val_loss, miou = evaluate(model, val_loader, ce_loss, dice_loss, args.sem_weight, device)
-            loss_window.append(train_loss)
+
+            # SDB monitors the epoch-average semantic loss, not the weighted total loss.
+            loss_window.append(train_sem)
             if converged(loss_window, args.tolerance):
                 consecutive_hits += 1
             else:
                 consecutive_hits = 0
             can_switch = (consecutive_hits >= max(1, args.consecutive) and
                           (epoch_id - stage_start + 1) < remaining)
-            history.append([epoch_id + 1, phase, train_loss, val_loss, miou, opt.param_groups[0]['lr'], consecutive_hits])
-            logging.info('epoch=%d phase=%s train=%.6f val=%.6f mIoU=%.6f stable=%d/%d',
-                         epoch_id + 1, phase, train_loss, val_loss, miou, consecutive_hits, args.consecutive)
+            history.append([epoch_id + 1, phase, train_total, train_sem, train_perc, val_loss,
+                            miou, opt.param_groups[0]['lr'], consecutive_hits])
+            logging.info('epoch=%d phase=%s total=%.6f semantic=%.6f perceptual=%.6f val=%.6f mIoU=%.6f stable=%d/%d',
+                         epoch_id + 1, phase, train_total, train_sem, train_perc, val_loss, miou,
+                         consecutive_hits, args.consecutive)
 
             state = {'model': unwrap(model).state_dict(), 'epoch': epoch_id + 1,
                      'phase': phase, 'miou': miou, 'history': history}
@@ -182,7 +195,8 @@ def trainer_transfer(args, model, snapshot_path):
 
     with open(os.path.join(snapshot_path, 'history.csv'), 'w', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
-        writer.writerow(['epoch', 'phase', 'train_loss', 'val_loss', 'mIoU', 'lr', 'stable_count'])
+        writer.writerow(['epoch', 'phase', 'train_total', 'semantic_loss', 'perceptual_loss',
+                         'val_loss', 'mIoU', 'lr', 'stable_count'])
         writer.writerows(history)
     logging.info('Finished; total_epochs=%d; best validation mIoU=%.6f', epoch_id, best)
     return best
