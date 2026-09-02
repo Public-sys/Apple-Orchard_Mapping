@@ -1,7 +1,7 @@
 BASE: ['']
 
 DATA:
-  BATCH_SIZE: 4
+  BATCH_SIZE: 16
   DATA_PATH: ''
   DATASET: 'apple_orchard'
   IMG_SIZE: 256
@@ -14,7 +14,7 @@ DATA:
 MODEL:
   TYPE: 'swin'
   NAME: 'swin_tiny_patch4_window8_256'
-  PRETRAIN_CKPT: './pretrained_ckpt/source_best.pth'
+  PRETRAIN_CKPT: ''
   RESUME: ''
   NUM_CLASSES: 2
   DROP_RATE: 0.0
@@ -37,9 +37,9 @@ MODEL:
 
 TRAIN:
   START_EPOCH: 0
-  EPOCHS: 150
-  WARMUP_EPOCHS: 5
-  WEIGHT_DECAY: 0.01
+  EPOCHS: 60
+  WARMUP_EPOCHS: 0
+  WEIGHT_DECAY: 0.0001
   BASE_LR: 0.0001
   MIN_LR: 0.000001
   CLIP_GRAD: 5.0
@@ -47,12 +47,13 @@ TRAIN:
   USE_CHECKPOINT: false
   PHF:
     ENABLE: true
-    INITIAL_PHASE: 'decoder_stage4'
+    INITIAL_PHASE: 'stage1_decoder'
+    MAX_EPOCHS_PER_STAGE: 20
+    SLIDING_WINDOW: 3
+    TOLERANCE: 0.005
+    CONSECUTIVE: 3
+    SEM_WEIGHT: 1.0
     PERC_WEIGHT: 0.05
-    STAGE4_EPOCHS: 10
-    STAGE3_EPOCHS: 20
-    FULL_FINE_TUNE_EPOCHS: 120
-    LR_DECAY: 0.1
   OPTIMIZER:
     NAME: 'adamw'
     EPS: 1.0e-8
