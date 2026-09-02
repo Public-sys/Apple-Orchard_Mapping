@@ -1,0 +1,103 @@
+import os
+import random
+import numpy as np
+import torch
+from scipy import ndimage
+from scipy.ndimage import zoom
+from torch.utils.data import Dataset
+
+
+def random_rot_flip(image, label):
+    k = np.random.randint(0, 4)
+    image = np.rot90(image, k, axes=(-2, -1)) if image.ndim == 3 else np.rot90(image, k)
+    label = np.rot90(label, k)
+    axis = np.random.randint(1, 3) if image.ndim == 3 else np.random.randint(0, 2)
+    image = np.flip(image, axis=axis).copy()
+    label = np.flip(label, axis=axis - 1 if image.ndim == 3 else axis).copy()
+    return image, label
+
+
+def random_rotate(image, label):
+    angle = np.random.uniform(-15, 15)
+    if image.ndim == 3:
+        image = np.stack([ndimage.rotate(c, angle, order=1, reshape=False, mode='reflect') for c in image])
+    else:
+        image = ndimage.rotate(image, angle, order=1, reshape=False, mode='reflect')
+    label = ndimage.rotate(label, angle, order=0, reshape=False, mode='nearest')
+    return image, label
+
+
+def prepare_image(image):
+    image = np.asarray(image)
+    if image.ndim == 2:
+        image = image[None, ...]
+    elif image.ndim == 3:
+        # Convert HWC to CHW; leave CHW unchanged.
+        if image.shape[-1] <= 8 and image.shape[0] > image.shape[-1]:
+            image = np.transpose(image, (2, 0, 1))
+        elif image.shape[0] <= 8:
+            pass
+        else:
+            raise ValueError(f'Cannot infer channel dimension from image shape {image.shape}')
+    else:
+        raise ValueError(f'Expected 2-D or 3-D image, got {image.shape}')
+    return image.astype(np.float32)
+
+
+class TransferGenerator:
+    def __init__(self, output_size=(256, 256), augment=True):
+        self.output_size = tuple(output_size)
+        self.augment = augment
+
+    def __call__(self, sample):
+        image = prepare_image(sample['image'])
+        label = np.asarray(sample['label']).squeeze().astype(np.int64)
+        if self.augment:
+            r = random.random()
+            if r < 0.5:
+                image, label = random_rot_flip(image, label)
+            elif r < 0.75:
+                image, label = random_rotate(image, label)
+
+        _, h, w = image.shape
+        oh, ow = self.output_size
+        if (h, w) != (oh, ow):
+            image = zoom(image, (1, oh / h, ow / w), order=1)
+            label = zoom(label, (oh / h, ow / w), order=0)
+
+        # Keep source/target preprocessing consistent. If input is already normalized, this is unchanged.
+        image = torch.from_numpy(np.ascontiguousarray(image)).float()
+        label = torch.from_numpy(np.ascontiguousarray(label)).long()
+        return {'image': image, 'label': label}
+
+
+class OrchardTransferDataset(Dataset):
+    def __init__(self, base_dir, list_dir, split, transform=None):
+        self.base_dir = base_dir
+        self.transform = transform
+        list_path = os.path.join(list_dir, split + '.txt')
+        if not os.path.isfile(list_path):
+            raise FileNotFoundError(f'Missing split file: {list_path}')
+        with open(list_path, 'r', encoding='utf-8') as f:
+            self.sample_list = [x.strip() for x in f if x.strip()]
+
+    def __len__(self):
+        return len(self.sample_list)
+
+    def __getitem__(self, idx):
+        name = self.sample_list[idx].split(',')[0]
+        path = name if os.path.isabs(name) else os.path.join(self.base_dir, name)
+        if not path.endswith('.npz'):
+            path += '.npz'
+        data = np.load(path)
+        if 'image' in data and 'label' in data:
+            image, label = data['image'], data['label']
+        elif 'data' in data and 'seg' in data:
+            image, label = data['data'], data['seg']
+        else:
+            raise KeyError(f'{path}: expected image/label or data/seg arrays')
+        sample = {'image': image, 'label': label}
+        if self.transform:
+            sample = self.transform(sample)
+        sample['case_name'] = name
+        return sample
