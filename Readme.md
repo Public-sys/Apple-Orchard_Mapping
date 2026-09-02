@@ -76,7 +76,7 @@ cd "CycleGan_Pytorch_Apple Orchard"
 python train.py --dataroot ./datasets/demo --name orchard_mapping_cyclegan --model cycle_gan --netG resnet_9blocks --n_epochs 50 --n_epochs_decay 50 --batch_size 16 --lr 0.0002 --lambda_A 10.0 --lambda_B 10.0 --lambda_identity 0.5 --display_id 1
 ```
 
-For the manuscript workflow, replace `datasets/demo` with the actual paired/unpaired source and target image directories used in the experiment.
+For the manuscript workflow, replace `datasets/demo` with the actual source and target image directories used in the experiment.
 
 ## 5. Generate synthetic Sentinel-2-style GeoTIFFs
 
@@ -84,10 +84,10 @@ After CycleGAN training, use `generate_tif.py` to translate RGB TIFFs while pres
 
 ```bash
 cd "CycleGan_Pytorch_Apple Orchard"
-python generate_tif.py --input_dir /path/to/jilin_tif --output_dir /path/to/cyclegan_s2_tif --checkpoint /path/to/G_A_checkpoint.pth --netG resnet_9blocks --norm instance
+python generate_tif.py --input_dir /path/to/jilin_tif --output_dir /path/to/cyclegan_s2_tif --checkpoint /path/to/G_A_checkpoint.pth --netG resnet_9blocks --ngf 64 --norm instance
 ```
 
-The script reads only `.tif`/`.tiff` files, requires the first three bands to be `uint8`, and writes three-band `uint8` GeoTIFF outputs with the source CRS and affine transform retained.
+The script reads `.tif`/`.tiff` files, requires the first three bands to be `uint8`, and writes three-band `uint8` GeoTIFF outputs with the source CRS and affine transform retained.
 
 ## 6. Phase 1: source-domain pretraining
 
@@ -110,7 +110,7 @@ This checkpoint is used to initialize Phase 2.
 
 ## 7. Phase 2: target-domain progressive fine-tuning
 
-Target-domain fine-tuning uses the following three stages:
+Target-domain fine-tuning uses three stages:
 
 | Stage | Trainable parameters | Maximum duration |
 |---|---|---:|
