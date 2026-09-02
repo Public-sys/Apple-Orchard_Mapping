@@ -6,6 +6,11 @@ from scipy import ndimage
 from scipy.ndimage import zoom
 from torch.utils.data import Dataset
 
+try:
+    import rasterio
+except ImportError:
+    rasterio = None
+
 
 def random_rot_flip(image, label):
     k = np.random.randint(0, 4)
@@ -25,6 +30,15 @@ def random_rotate(image, label):
         image = ndimage.rotate(image, angle, order=1, reshape=False, mode='reflect')
     label = ndimage.rotate(label, angle, order=0, reshape=False, mode='nearest')
     return image, label
+
+
+def read_tif(path):
+    if rasterio is None:
+        raise ImportError('TIFF input requires rasterio. Install it with: pip install rasterio')
+    with rasterio.open(path) as src:
+        arr = src.read()
+    # Rasterio returns C,H,W, which is exactly the model input convention.
+    return arr
 
 
 def prepare_image(image):
@@ -65,13 +79,22 @@ class TransferGenerator:
             image = zoom(image, (1, oh / h, ow / w), order=1)
             label = zoom(label, (oh / h, ow / w), order=0)
 
-        # Keep source/target preprocessing consistent. If input is already normalized, this is unchanged.
         image = torch.from_numpy(np.ascontiguousarray(image)).float()
         label = torch.from_numpy(np.ascontiguousarray(label)).long()
         return {'image': image, 'label': label}
 
 
 class OrchardTransferDataset(Dataset):
+    """Dataset supporting paired TIFFs and the legacy NPZ format.
+
+    Each split file contains either:
+      image_path,label_path
+    or, for NPZ:
+      sample_path
+
+    Relative paths are resolved against base_dir. TIFF georeferencing is read
+    but intentionally not altered; the model consumes the raster values only.
+    """
     def __init__(self, base_dir, list_dir, split, transform=None):
         self.base_dir = base_dir
         self.transform = transform
@@ -79,25 +102,52 @@ class OrchardTransferDataset(Dataset):
         if not os.path.isfile(list_path):
             raise FileNotFoundError(f'Missing split file: {list_path}')
         with open(list_path, 'r', encoding='utf-8') as f:
-            self.sample_list = [x.strip() for x in f if x.strip()]
+            self.sample_list = [x.strip() for x in f if x.strip() and not x.lstrip().startswith('#')]
 
     def __len__(self):
         return len(self.sample_list)
 
+    def _resolve(self, p):
+        return p if os.path.isabs(p) else os.path.join(self.base_dir, p)
+
     def __getitem__(self, idx):
-        name = self.sample_list[idx].split(',')[0]
-        path = name if os.path.isabs(name) else os.path.join(self.base_dir, name)
-        if not path.endswith('.npz'):
-            path += '.npz'
-        data = np.load(path)
-        if 'image' in data and 'label' in data:
-            image, label = data['image'], data['label']
-        elif 'data' in data and 'seg' in data:
-            image, label = data['data'], data['seg']
+        fields = [x.strip() for x in self.sample_list[idx].split(',') if x.strip()]
+        if len(fields) == 2:
+            image_path = self._resolve(fields[0])
+            label_path = self._resolve(fields[1])
+            if not os.path.splitext(image_path)[1]:
+                image_path += '.tif'
+            if not os.path.splitext(label_path)[1]:
+                label_path += '.tif'
+            if not os.path.isfile(image_path):
+                raise FileNotFoundError(f'Image not found: {image_path}')
+            if not os.path.isfile(label_path):
+                raise FileNotFoundError(f'Label not found: {label_path}')
+            image = read_tif(image_path) if image_path.lower().endswith(('.tif', '.tiff')) else np.load(image_path)
+            label = read_tif(label_path).squeeze() if label_path.lower().endswith(('.tif', '.tiff')) else np.load(label_path).squeeze()
+            if image.ndim == 3 and label.ndim == 3:
+                label = label[0]
+            case_name = os.path.splitext(os.path.basename(image_path))[0]
         else:
-            raise KeyError(f'{path}: expected image/label or data/seg arrays')
+            name = fields[0]
+            path = self._resolve(name)
+            if not os.path.splitext(path)[1]:
+                path += '.npz'
+            if not path.lower().endswith('.npz'):
+                raise ValueError(f'Single-path entries must point to NPZ samples: {path}')
+            data = np.load(path)
+            if 'image' in data and 'label' in data:
+                image, label = data['image'], data['label']
+            elif 'data' in data and 'seg' in data:
+                image, label = data['data'], data['seg']
+            else:
+                raise KeyError(f'{path}: expected image/label or data/seg arrays')
+            case_name = os.path.splitext(os.path.basename(path))[0]
+
+        if image.shape[-2:] != label.shape[-2:]:
+            raise ValueError(f'Spatial mismatch: image {image.shape}, label {label.shape}')
         sample = {'image': image, 'label': label}
         if self.transform:
             sample = self.transform(sample)
-        sample['case_name'] = name
+        sample['case_name'] = case_name
         return sample
