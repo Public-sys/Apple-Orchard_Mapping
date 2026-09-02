@@ -37,7 +37,6 @@ def read_tif(path):
         raise ImportError('TIFF input requires rasterio. Install it with: pip install rasterio')
     with rasterio.open(path) as src:
         arr = src.read()
-    # Rasterio returns C,H,W, which is exactly the model input convention.
     return arr
 
 
@@ -46,16 +45,35 @@ def prepare_image(image):
     if image.ndim == 2:
         image = image[None, ...]
     elif image.ndim == 3:
-        # Convert HWC to CHW; leave CHW unchanged.
-        if image.shape[-1] <= 8 and image.shape[0] > image.shape[-1]:
-            image = np.transpose(image, (2, 0, 1))
-        elif image.shape[0] <= 8:
+        # Rasterio TIFFs are normally CHW. Legacy arrays may be HWC.
+        if image.shape[0] <= 8:
             pass
+        elif image.shape[-1] <= 8:
+            image = np.transpose(image, (2, 0, 1))
         else:
             raise ValueError(f'Cannot infer channel dimension from image shape {image.shape}')
     else:
         raise ValueError(f'Expected 2-D or 3-D image, got {image.shape}')
     return image.astype(np.float32)
+
+
+def normalize_image(image):
+    """Convert common remote-sensing TIFF ranges to the model's [0, 1] input range.
+
+    8-bit imagery is divided by 255. Float data already in [0,1] are preserved.
+    Other integer/float ranges are min-max normalized per sample to avoid silently
+    passing incompatible radiometric scales to the network.
+    """
+    image = image.astype(np.float32, copy=False)
+    if np.issubdtype(image.dtype, np.floating) and np.nanmin(image) >= 0 and np.nanmax(image) <= 1.0:
+        return image
+    max_value = float(np.nanmax(image))
+    min_value = float(np.nanmin(image))
+    if min_value >= 0 and max_value <= 255:
+        return image / 255.0
+    if max_value > min_value:
+        return (image - min_value) / (max_value - min_value)
+    return np.zeros_like(image, dtype=np.float32)
 
 
 class TransferGenerator:
@@ -79,6 +97,7 @@ class TransferGenerator:
             image = zoom(image, (1, oh / h, ow / w), order=1)
             label = zoom(label, (oh / h, ow / w), order=0)
 
+        image = normalize_image(image)
         image = torch.from_numpy(np.ascontiguousarray(image)).float()
         label = torch.from_numpy(np.ascontiguousarray(label)).long()
         return {'image': image, 'label': label}
@@ -92,8 +111,8 @@ class OrchardTransferDataset(Dataset):
     or, for NPZ:
       sample_path
 
-    Relative paths are resolved against base_dir. TIFF georeferencing is read
-    but intentionally not altered; the model consumes the raster values only.
+    Relative paths are resolved against base_dir. TIFF georeferencing is not
+    altered; the model consumes raster values only.
     """
     def __init__(self, base_dir, list_dir, split, transform=None):
         self.base_dir = base_dir
