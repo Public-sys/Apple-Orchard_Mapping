@@ -1,0 +1,12 @@
+{
+  "name": "G8_Full",
+  "description": "Proposed Full: CycleGAN-based Pre-training + Progressive Unfreezing + Strategy-Decision Block + Hierarchical Perceptual Loss.",
+  "DT": false,
+  "CG_PT": true,
+  "PU": true,
+  "SDB": true,
+  "HPL": true,
+  "epochs": 60,
+  "max_epochs_per_stage": 20,
+  "perc_weight": 0.05
+}
