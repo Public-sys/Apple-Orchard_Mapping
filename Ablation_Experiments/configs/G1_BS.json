@@ -1,0 +1,12 @@
+{
+  "name": "G1_BS",
+  "description": "Baseline (Scratch): target-domain training from random initialization.",
+  "DT": false,
+  "CG_PT": false,
+  "PU": false,
+  "SDB": false,
+  "HPL": false,
+  "epochs": 60,
+  "max_epochs_per_stage": 20,
+  "perc_weight": 0.0
+}
