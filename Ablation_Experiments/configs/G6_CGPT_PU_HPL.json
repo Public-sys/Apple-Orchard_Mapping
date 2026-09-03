@@ -1,0 +1,12 @@
+{
+  "name": "G6_CGPT_PU_HPL",
+  "description": "CycleGAN-based Pre-training plus Progressive Unfreezing and Hierarchical Perceptual Loss; no SDB.",
+  "DT": false,
+  "CG_PT": true,
+  "PU": true,
+  "SDB": false,
+  "HPL": true,
+  "epochs": 60,
+  "max_epochs_per_stage": 20,
+  "perc_weight": 0.05
+}
