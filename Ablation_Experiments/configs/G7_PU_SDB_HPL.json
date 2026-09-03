@@ -1,0 +1,12 @@
+{
+  "name": "G7_PU_SDB_HPL",
+  "description": "Without CycleGAN-based Pre-training: target-domain training from scratch with Progressive Unfreezing, SDB, and HPL.",
+  "DT": false,
+  "CG_PT": false,
+  "PU": true,
+  "SDB": true,
+  "HPL": true,
+  "epochs": 60,
+  "max_epochs_per_stage": 20,
+  "perc_weight": 0.05
+}
