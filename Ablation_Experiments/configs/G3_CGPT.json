@@ -1,0 +1,12 @@
+{
+  "name": "G3_CGPT",
+  "description": "CycleGAN-based Pre-training without progressive unfreezing, SDB, or HPL.",
+  "DT": false,
+  "CG_PT": true,
+  "PU": false,
+  "SDB": false,
+  "HPL": false,
+  "epochs": 60,
+  "max_epochs_per_stage": 20,
+  "perc_weight": 0.0
+}
