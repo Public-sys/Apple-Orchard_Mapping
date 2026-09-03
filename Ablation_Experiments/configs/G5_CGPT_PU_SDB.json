@@ -1,0 +1,12 @@
+{
+  "name": "G5_CGPT_PU_SDB",
+  "description": "CycleGAN-based Pre-training plus Progressive Unfreezing and Strategy-Decision Block; no HPL.",
+  "DT": false,
+  "CG_PT": true,
+  "PU": true,
+  "SDB": true,
+  "HPL": false,
+  "epochs": 60,
+  "max_epochs_per_stage": 20,
+  "perc_weight": 0.0
+}
