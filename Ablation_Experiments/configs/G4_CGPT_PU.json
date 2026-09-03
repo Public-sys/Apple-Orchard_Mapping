@@ -1,0 +1,12 @@
+{
+  "name": "G4_CGPT_PU",
+  "description": "CycleGAN-based Pre-training plus Progressive Unfreezing; no SDB or HPL.",
+  "DT": false,
+  "CG_PT": true,
+  "PU": true,
+  "SDB": false,
+  "HPL": false,
+  "epochs": 60,
+  "max_epochs_per_stage": 20,
+  "perc_weight": 0.0
+}
