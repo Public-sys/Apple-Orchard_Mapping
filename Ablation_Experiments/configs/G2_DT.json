@@ -1,0 +1,12 @@
+{
+  "name": "G2_DT",
+  "description": "Direct Transfer Learning: initialize from the original source-domain Swin-Unet checkpoint, then fine-tune all parameters on the target domain.",
+  "DT": true,
+  "CG_PT": false,
+  "PU": false,
+  "SDB": false,
+  "HPL": false,
+  "epochs": 60,
+  "max_epochs_per_stage": 20,
+  "perc_weight": 0.0
+}
